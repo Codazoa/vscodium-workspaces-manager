@@ -1,0 +1,192 @@
+#!/usr/bin/python3
+
+# Author: Codazoa
+# VSCodium workspace manager
+# w/ issue tracking
+
+import os
+import sys
+import re
+import argparse
+import configparser
+import shutil
+import json
+
+appName = 'vsworkspace-manager'
+curPath = os.path.abspath(os.getcwd())
+usrHomeDir = os.path.expanduser('~')
+scriptInstallLocation = os.path.join(usrHomeDir ,'.local', 'bin')
+workspacePath = os.path.join(usrHomeDir, 'Workspaces')
+config_folder = os.path.join(os.path.expanduser('~'), '.config', appName)
+config_file = 'workspace.conf'
+full_config_file_path = os.path.join(config_folder, config_file)
+
+def check_for_first_time_install():
+    # creating configurations
+    # setting config paths
+    os.makedirs(config_folder, exist_ok=True)
+    config = configparser.ConfigParser()
+    config['Default'] = {
+        'Workspace_Folder': workspacePath,
+        'Workspace_Editor': 'codium',
+        'File_Browser': 'dolphin'}
+
+    # create and write config_file if it doesn't exist
+    if not os.path.exists(full_config_file_path) or os.stat(full_config_file_path).st_size == 0:
+        print('Creating workspace.conf file')
+        with open(full_config_file_path, 'w') as configfile:
+            config.write(configfile)
+
+    # create and write issues.md in config folder if it doesn't exist
+    if not os.path.exists(os.path.join(config_folder, 'issues.md')):
+        print('Creating issues.md file')
+        with open(os.path.join(config_folder, 'issues.md'), 'w') as issueFile:
+            issueFile.write("## Resolved Issues ##\n\n\n\n## Open Issues ##\n")
+
+    # create workspace folder if it doesn't exist
+    if not os.path.exists(workspacePath):
+        print('Creating workspace folder')
+        os.mkdir(workspacePath, 0o755)
+
+    # move workspace script into PATH if it does not exist
+    if not os.path.exists(os.path.abspath('~/.local/bin/workspace')):
+        print('Moving workspace script into PATH: ~/.local/bin/')
+        shutil.copyfile(os.path.abspath(os.path.join(os.getcwd(), 'workspace')), os.path.abspath('~/.local/bin/workspace'))
+
+
+
+def get_attrib_from_config(attrib):
+    config = configparser.ConfigParser()
+    # read and return the config file
+    config.read(full_config_file_path)
+    return config['Default'][attrib]
+
+
+def create_workspace():
+    # get workspace inputs
+    name = input('Name of workspace to create: ')
+    path = input('Folder to create workspace in (leave blank for current folder): ')
+    if path == '': # path is empty, use current directory
+        path = os.path.abspath(os.getcwd())
+    elif not os.path.exists(path):
+        print(f'Path:{path} does not exist...\n:::Exiting:::')
+        exit()
+    path = os.path.abspath(path)
+
+    # create folder at path
+    path = os.path.join(path, name)
+    usr = 'y'
+    try:
+        os.mkdir(path, 0o755)
+    except FileExistsError:
+        usr = input(f'{path} already exists. Do you still want to create a workspace here? (y/n): ')
+
+    if usr.lower()[0] != 'y': # user entered no, don't create this as a workspace, exit and die
+        print('Ignoring creation of workspace...\n:::Exiting:::')
+        exit()
+    else: # user entered yes. Create the workspace here
+        print(f'Creating workspace {name} in {path}')
+
+    # copy issues.md into new folder if it doesn't already exist
+    if not os.path.exists(os.path.join(path, 'issues.md')):
+        shutil.copyfile(os.path.join(config_folder, 'issues.md'), os.path.join(path, 'issues.md'))
+
+    # create workspace file in workspacePath
+    workspacePath = get_attrib_from_config('Workspace_Folder')
+    workspacePath = os.path.join(workspacePath, name + '.code-workspace')
+
+    # set up json formatting and write to workspace file
+    workspaceJson = {"folders": [], "settings": {}}
+    workspaceJson["folders"].append({"path": path})
+    workspaceJson = json.dumps(workspaceJson, indent=4)
+
+    with open(workspacePath, 'w+') as workFile:
+        workFile.write(workspaceJson)
+
+    pass
+
+
+def add_issue(issue):
+    userEntry = ''
+
+    full_path = os.path.join((curPath), 'issues.md')
+
+    if not os.path.exists(full_path):
+        userEntry = input('issues.md does not exist in current folder:\nDo you want to create it? (y/n): ')
+        if userEntry.lower()[0] == 'y':
+            shutil.copyfile(os.path.join(config_file, 'issues.md'), full_path)
+        else:
+            print(':::Exiting:::')
+            exit()
+    
+    # getting issue numbers from file and fixing them
+    issueNum = [re.findall(r'\([\d]*\)', line) for line in open(full_path)]
+    issueNum = [x[0] for x in issueNum if len(x) > 0]
+    issueNum = [x.replace('(', '') for x in issueNum]
+    issueNum = [x.replace(')', '') for x in issueNum]
+    issueNum = [int(x) for x in issueNum]
+
+    # case for no issues yet (new issues.md)
+    if len(issueNum) != 0:
+        newNum = max(issueNum)+1
+    else: newNum = 1
+        
+    # write the new issue to file
+    with open(full_path, 'a') as file:
+        file.write(f'- ({newNum}) {issue}\n')
+
+    print(f'Issue {newNum} added: {issue}')
+    pass
+
+
+def open_workspace(name):
+    workspace = os.path.abspath(os.path.join(workspacePath, name+'.code-workspace'))
+    # if the exact name doesn't match
+    if not os.path.exists(workspace):
+        print(f'{name} has not been set up as a workspace...\n:::Exiting:::')
+        exit()
+
+    # get editor and fileBrowser settings from config
+    editor = get_attrib_from_config('Workspace_Editor')
+    fileBrowser = get_attrib_from_config('File_Browser')
+
+    # read in workspace file and extract the folder path
+    with open(workspace, 'rt') as file:
+        workspaceLocation = file.read()
+    workspaceLocation = json.loads(workspaceLocation)
+    workspaceLocation = workspaceLocation['folders'][0]['path']
+
+    # open the workspace
+    os.system(f'{editor} {workspace}')
+    # open the folder too
+    os.system(f'{fileBrowser} {workspaceLocation}')
+
+
+def main():
+    check_for_first_time_install()
+
+    workspacePath = get_attrib_from_config('Workspace_Folder')
+
+    # argument checking
+    parser = argparse.ArgumentParser(description='Create and manage VSCodium workspaces and issue tracking')
+    parser.add_argument('-c','--create', action='store_true',
+        help='Create a new workspace')
+    parser.add_argument('-a', '--addissue', metavar='ISSUE', type=str, nargs='+',
+        help='Add an issue to the current workspace\'s issue.md')
+    parser.add_argument('-o', '--open', metavar='NAME', type=str, nargs='?',
+        help='Open workspace [NAME], prompt user if multiple similar exist')
+
+    args = parser.parse_args()
+
+    if args.create:
+        create_workspace()
+
+    if args.addissue:
+        add_issue(' '.join(args.addissue))
+
+    if args.open:
+        open_workspace(args.open)
+
+
+if __name__ == '__main__':
+    main()
